@@ -289,9 +289,15 @@ const expenseController = {
 
     // Submit a new expense
     submit: async (req, res) => {
-        const expenseData = req.body;
+        // 1. Basic validation and data extraction
+        const { userId, userName, amount, currency, category, description, date } = req.body;
+        
+        if (!userId || !amount || !currency || !category || !description || !date) {
+            return res.status(400).json({ message: 'Missing required fields for expense submission.' });
+        }
         
         try {
+            // 2. Fetch necessary data (Settings and Users)
             const [settings, allUsersRaw] = await Promise.all([
                 Company.findOne({ id: 'settings' }),
                 User.find({}) 
@@ -299,15 +305,28 @@ const expenseController = {
             
             const allUsers = allUsersRaw.map(u => u.toJSON());
             
-            if (!settings) return res.status(500).json({ message: 'Company settings not found.' });
+            if (!settings) return res.status(500).json({ message: 'Company settings not found. Cannot process expense.' });
 
+            // CRITICAL: MOCK CURRENCY CONVERSION (Needs a real API in production)
+            const MOCK_RATES = {
+                "USD": 1, "EUR": 0.92, "GBP": 0.78, "JPY": 155.00, "CAD": 1.36, "INR": 83.00,
+                "AUD": 1.50, "CHF": 0.90, "CNY": 7.25
+            };
+            const rateFrom = MOCK_RATES[currency] || 1;
+            const rateTo = MOCK_RATES[settings.baseCurrency] || 1;
+            const baseAmount = parseFloat(((amount / rateFrom) * rateTo).toFixed(2));
+
+
+            // 3. Create Expense Document
             const newExpense = new Expense({
-                ...expenseData,
+                ...req.body,
                 id: uuidv4(),
+                baseAmount: baseAmount,
                 baseCurrency: settings.baseCurrency,
                 submittedAt: Date.now(),
             });
 
+            // 4. Build approval chain
             newExpense.approvalChain = await expenseController.createApprovalChain(
                 newExpense, 
                 settings, 
@@ -316,10 +335,12 @@ const expenseController = {
 
             newExpense.currentApproverIndex = 0;
 
+            // 5. Save and Respond
             await newExpense.save();
             res.status(201).json(newExpense);
         } catch (error) {
-            res.status(500).json({ message: 'Error submitting expense', error: error.message });
+            console.error('Error submitting expense:', error.message, error.stack);
+            res.status(500).json({ message: 'Error submitting expense: ' + error.message });
         }
     },
     
